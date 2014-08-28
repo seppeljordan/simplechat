@@ -266,13 +266,10 @@ checkClientForInput cl =
        else return cl
 
 
-listner :: Net.Socket -> Chan ChatClient -> IO ()
-listner sock chan =
-    Net.accept sock >>= \(s,_) ->
+listner :: Net.Socket -> IO ChatClient
+listner sock =
     logMsg "Client tries to connect" >>
-    socketToClient "NoName" s >>= \cl ->
-    writeChan chan cl >>
-    listner sock chan
+    socketToClient "NoName" sock
 
 
 logMsg :: String -> IO ()

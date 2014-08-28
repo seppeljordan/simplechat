@@ -22,14 +22,23 @@ checkSocket sock =
     then return ()
     else error "checkSocket: Socket is not listening"
 
-spawnListener :: (Socket -> Chan a -> IO ()) -> Socket ->  IO (Listener a)
-spawnListener listener sock =
+
+makeListener :: (Socket -> IO a) -> Socket -> Chan a -> IO ()
+makeListener f sock chan =
+    accept sock >>= \(s,_) ->
+    f s >>= \x ->
+    writeChan chan x >>
+    makeListener f sock chan
+
+
+spawnListener :: (Socket -> IO a) -> Socket ->  IO (Listener a)
+spawnListener f sock =
     isListening sock >>= \p ->
     (if p
      then return ()
      else error "spawnListener: Socket is not Listening") >>
     newChan >>= \chan ->
-    forkIO (listener sock chan) >>= \threadid ->
+    forkIO (makeListener f sock chan) >>= \threadid ->
     return (threadid, chan)
 
 killListener :: Listener a -> IO ()
