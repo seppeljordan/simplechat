@@ -14,6 +14,7 @@ import qualified Network.Socket as Net
 import System.IO
 import System.Locale
 
+import Network.Listener
 
 port = Net.PortNum 4141
 host = Net.iNADDR_ANY
@@ -267,7 +268,6 @@ checkClientForInput cl =
 
 listner :: Net.Socket -> Chan ChatClient -> IO ()
 listner sock chan =
-    checkListening sock >>
     Net.accept sock >>= \(s,_) ->
     logMsg "Client tries to connect" >>
     socketToClient "NoName" s >>= \cl ->
@@ -279,25 +279,9 @@ logMsg :: String -> IO ()
 logMsg = putStrLn
 
 
-checkListening :: Net.Socket -> IO ()
-checkListening sock =
-    fmap
-    (\p -> if not p
-           then error "Not listening on socket"
-           else ())
-    (Net.isListening sock)
-
-
-spawnListener :: Net.Socket -> IO (ThreadId, Chan ChatClient)
-spawnListener sock =
-    (newChan :: IO (Chan ChatClient)) >>= \chan ->
-    forkIO (listner sock chan) >>= \threadid ->
-    return (threadid, chan)
-
-
 main :: IO ()
 main =
     openSocket >>=
-    spawnListener >>= \(thread, channel) ->
-    mainLoop channel [] >>
-    killThread thread
+    spawnListener listner >>= \l ->
+    mainLoop (getChan l) [] >>
+    killListener l
