@@ -15,6 +15,7 @@ type Listener a = (ThreadId, Chan a)
 getChan :: Listener a -> Chan a
 getChan (_,c) = c
 
+
 checkSocket :: Socket -> IO ()
 checkSocket sock =
     isListening sock >>= \p ->
@@ -33,10 +34,7 @@ makeListener f sock chan =
 
 spawnListener :: (Socket -> IO a) -> Socket ->  IO (Listener a)
 spawnListener f sock =
-    isListening sock >>= \p ->
-    (if p
-     then return ()
-     else error "spawnListener: Socket is not Listening") >>
+    checkSocket sock >>
     newChan >>= \chan ->
     forkIO (makeListener f sock chan) >>= \threadid ->
     return (threadid, chan)

@@ -4,10 +4,7 @@ module Chat (main)
 where
 
 import Control.Concurrent
-import Control.Concurrent.Chan
 import Control.Exception
-import Control.Monad
-import Data.IP
 import Data.Time.Clock
 import Data.Time.Format
 import qualified Network.Socket as Net
@@ -16,7 +13,12 @@ import System.Locale
 
 import Network.Listener
 
+
+port :: Net.PortNumber
 port = Net.PortNum 4141
+
+
+host :: Net.HostAddress
 host = Net.iNADDR_ANY
 
 
@@ -47,22 +49,6 @@ instance Show Message where
 makeMsg :: String -> IO Message
 makeMsg text =
     fmap (\time -> Message (time,text)) getCurrentTime
-
-
-readMessage :: IO Message
-readMessage =
-    getLine >>= \s ->
-    getCurrentTime >>= \t ->
-    return $ Message (t,s)
-
-
-hPutMessage :: Handle -> Message -> IO ()
-hPutMessage hdl m =
-    hPutStrLn hdl (show m)
-
-
-msgText :: Message -> String
-msgText (Message (_,t)) = t
 
 
 data ChatClient = ChatClient { clName :: String
@@ -107,15 +93,6 @@ socketToClient name socket =
     in fmap construct (Net.socketToHandle socket ReadWriteMode)
 
 
-fileClient :: String -> FilePath -> IO ChatClient
-fileClient name path =
-    let construct hdl = ChatClient { clName = name
-                                   , clHandle = hdl
-                                   , clBuffer = []
-                                   }
-    in fmap construct (openFile path ReadWriteMode)
-
-
 closeClient :: ChatClient -> IO ()
 closeClient cl =
     logMsg ("Connection to "++clName cl++" closed") >>
@@ -138,11 +115,6 @@ broadcastMessage :: [ChatClient] -> String -> IO ()
 broadcastMessage cls text =
     makeMsg text >>= \msg ->
     broadcast cls (show msg)
-
-
-mbroadcast :: [ChatClient] -> Maybe String -> IO ()
-mbroadcast _ Nothing = return ()
-mbroadcast cls (Just msg) = broadcast cls msg
 
 
 send :: String -> ChatClient -> IO ()
@@ -219,17 +191,15 @@ hasRenameCommand cl
 
 
 renameClient :: [ChatClient] -> ChatClient -> IO ChatClient
-renameClient cls cl | (not.hasMsg) cl = return cl
-                    | (not.hasRenameCommand) cl = return cl
+renameClient _ cl | (not.hasMsg) cl = return cl
+                  | (not.hasRenameCommand) cl = return cl
 renameClient cls cl =
     let (newCl, mtext) = getMsg cl
         oldName = clName cl
-        makeMsg txt = getCurrentTime >>= \time -> return (show (Message (time, txt)))
     in if (head.words.(maybe "arg" id)) mtext == "nick"
        then let newName = (unwords.tail.words.(maybe "" id)) mtext
-            in makeMsg (oldName ++ " -> " ++ newName) >>= \msg ->
-                broadcast cls msg >>
-                return (newCl { clName =  newName })
+            in broadcastMessage cls (oldName ++ " -> " ++ newName) >>
+               return (newCl { clName =  newName })
        else return cl
 
 
@@ -259,15 +229,15 @@ checkClientsForInput cls =
 checkClientForInput :: ChatClient -> IO ChatClient
 checkClientForInput cl =
     let hdl = (clHandle cl)
-    in hReady (clHandle cl) >>= \avail ->
+    in hReady hdl >>= \avail ->
        if avail
-       then hGetLine (clHandle cl) >>= \line ->
+       then hGetLine hdl >>= \line ->
             return (addLineToBuffer line cl)
        else return cl
 
 
-listner :: Net.Socket -> IO ChatClient
-listner sock =
+clientFromSocket :: Net.Socket -> IO ChatClient
+clientFromSocket sock =
     logMsg "Client tries to connect" >>
     socketToClient "NoName" sock
 
@@ -279,6 +249,6 @@ logMsg = putStrLn
 main :: IO ()
 main =
     openSocket >>=
-    spawnListener listner >>= \l ->
+    spawnListener clientFromSocket >>= \l ->
     mainLoop (getChan l) [] >>
     killListener l
