@@ -1,0 +1,7 @@
+* About
+  This Haskell program implements a really simple chat server.  You
+  can connect via telnet to the server.
+
+* Warning
+  Do not use this program.  It is not tested for any security issues.
+  There is no account or password system implemented.
