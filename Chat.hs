@@ -14,6 +14,7 @@ import qualified Network.Socket as Net
 import System.IO
 import System.Locale
 
+
 port = Net.PortNum 4141
 host = Net.iNADDR_ANY
 
@@ -21,7 +22,6 @@ host = Net.iNADDR_ANY
 filterEmpty :: (Eq a) => [[a]] -> [[a]]
 filterEmpty xss =
     filter (\xs -> not (xs==[])) xss
-
 
 
 openSocket :: IO Net.Socket
@@ -33,7 +33,9 @@ openSocket =
     logMsg ("Socket opened on port "++show port) >>
     return s
 
+
 newtype Message = Message (UTCTime, String)
+
 
 instance Show Message where
     show (Message (t, s)) =
@@ -52,18 +54,21 @@ readMessage =
     getCurrentTime >>= \t ->
     return $ Message (t,s)
 
+
 hPutMessage :: Handle -> Message -> IO ()
 hPutMessage hdl m =
     hPutStrLn hdl (show m)
 
+
 msgText :: Message -> String
 msgText (Message (_,t)) = t
 
+
 data ChatClient = ChatClient { clName :: String
-                             , clMessages :: [Message]
                              , clHandle :: Handle
                              , clBuffer :: [String]
                              }
+
 
 instance Eq ChatClient where
     (==) cl1 cl2 =
@@ -95,7 +100,6 @@ hasMsg cl | clBuffer cl == [] = False
 socketToClient :: String -> Net.Socket -> IO ChatClient
 socketToClient name socket =
     let construct hdl = ChatClient { clName = name
-                                   , clMessages = []
                                    , clHandle = hdl
                                    , clBuffer = []
                                    }
@@ -105,7 +109,6 @@ socketToClient name socket =
 fileClient :: String -> FilePath -> IO ChatClient
 fileClient name path =
     let construct hdl = ChatClient { clName = name
-                                   , clMessages = []
                                    , clHandle = hdl
                                    , clBuffer = []
                                    }
@@ -117,10 +120,6 @@ closeClient cl =
     logMsg ("Connection to "++clName cl++" closed") >>
     hClose (clHandle cl)
 
-
-clientAddMessage :: Message -> ChatClient -> ChatClient
-clientAddMessage m cl =
-    cl {clMessages = m:(clMessages cl)}
 
 broadcast :: [ChatClient] -> String -> IO ()
 broadcast cls str =
@@ -149,16 +148,6 @@ send :: String -> ChatClient -> IO ()
 send str cl =
     hPutStrLn (clHandle cl) str >> hFlush (clHandle cl)
 
-
-getMessage :: ChatClient -> IO (ChatClient, Message)
-getMessage cli =
-    hGetLine (clHandle cli) >>= \msgText ->
-    getCurrentTime >>= \t ->
-    let message = Message (t, msgText)
-    in return
-           ( clientAddMessage message cli
-           , message
-           )
 
 mainLoop :: Chan ChatClient -> [ChatClient] -> IO ()
 mainLoop chan clients =
@@ -228,8 +217,6 @@ hasRenameCommand cl
                              ) mtext
 
 
-
-
 renameClient :: [ChatClient] -> ChatClient -> IO ChatClient
 renameClient cls cl | (not.hasMsg) cl = return cl
                     | (not.hasRenameCommand) cl = return cl
@@ -243,7 +230,6 @@ renameClient cls cl =
                 broadcast cls msg >>
                 return (newCl { clName =  newName })
        else return cl
-
 
 
 installNewConnections :: [ChatClient] -> [ChatClient] -> IO [ChatClient]
@@ -277,7 +263,6 @@ checkClientForInput cl =
        then hGetLine (clHandle cl) >>= \line ->
             return (addLineToBuffer line cl)
        else return cl
-
 
 
 listner :: Net.Socket -> Chan ChatClient -> IO ()
