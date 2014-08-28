@@ -263,31 +263,9 @@ spawnListener sock =
     return (threadid, chan)
 
 
+main :: IO ()
 main =
     openSocket >>=
     spawnListener >>= \(thread, channel) ->
     mainLoop channel [] >>
     killThread thread
-
-
-makeLogger :: IO ChatClient
-makeLogger =
-    fileClient "logger" "/tmp/testfile"
-
-
-
--- |Test the capabilities of the send command
-writerTest :: FilePath -> IO ()
-writerTest path =
-    fileClient "testclient" path >>= \client ->
-    logTest client >>
-    closeClient client
-
-
-logTest :: ChatClient -> IO ()
-logTest cli =
-    readMessage >>= \msg ->
-    send (show msg) cli >>
-    if (msgText msg) == "quit"
-    then return ()
-    else logTest cli
