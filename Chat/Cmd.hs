@@ -15,6 +15,7 @@ data Command = Quit
              | Help
              | CmdError String
              | Message String
+             | PM String String
                deriving (Show)
 
 parseOnly str x =
@@ -25,7 +26,7 @@ parseQuit =
 
 parseNick =
     string "nick " >>
-    many letter >>= \name ->
+    many1 letter >>= \name ->
     eof >>
     return (Nick name)
 
@@ -35,6 +36,15 @@ parseWho =
 parseHelp =
     parseOnly "help" Help
 
+parsePM =
+    string "pm" >>
+    many1 space >>
+    many1 letter >>= \target ->
+    many1 space >>
+    many1 anyChar >>= \msg ->
+    eof >>
+    return (PM target msg)
+
 parseCommand =
     (many.char) ' ' >>
     char '/' >>
@@ -42,6 +52,7 @@ parseCommand =
      try parseNick <|>
      try parseWho <|>
      try parseHelp <|>
+     try parsePM <|>
      (many anyChar >> eof >> return (CmdError "Command not recognized") )
     )
 
@@ -72,4 +83,5 @@ commandHelp =
     , "    /help - get this help message"
     , "    /nick STRING - change nickname to STRING"
     , "    /who - check who is logged in"
+    , "    /pm NAME MESSAGE - send privat MESSAGE to NAME"
     ]

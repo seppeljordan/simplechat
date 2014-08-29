@@ -123,6 +123,12 @@ send str cl =
     else return ()
 
 
+sendMessage :: String -> ChatClient -> IO ()
+sendMessage text cl =
+    makeMsg text >>= \msg ->
+    send (show msg) cl
+
+
 mainLoop :: Listener ChatClient -> [ChatClient] -> IO ()
 mainLoop l clients =
     threadDelay 5000 >>
@@ -174,6 +180,16 @@ executeCmd (CmdError msg) =
     \cl _ -> send msg cl >>
              send commandHelp cl >>
              return cl
+executeCmd (PM target msg) =
+    \cl cls -> sendPM cls cl target msg >>
+               return cl
+
+
+sendPM :: [ChatClient] -> ChatClient -> String -> String -> IO ()
+sendPM cls src destName text =
+    let targets = filter (\x -> clName x == destName) cls
+        msg = "<"++clName src++"> "++text
+    in (sequence_.map (sendMessage msg)) targets
 
 
 quitConnection :: [ChatClient] -> ChatClient -> IO [ChatClient]
