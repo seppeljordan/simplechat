@@ -4,6 +4,7 @@ module Chat (main)
 where
 
 import Control.Concurrent hiding (isEmptyChan)
+import Control.Exception
 import Data.Time.Clock
 import Data.Time.Format
 import qualified Network.Socket as Net
@@ -68,7 +69,7 @@ addLineToBuffer :: String -> ChatClient -> ChatClient
 addLineToBuffer [] cl = cl
 addLineToBuffer line cl | words line == [] = cl
                         | otherwise =
-                            cl { clBuffer = (clBuffer cl) ++ [(read line)] }
+                            cl { clBuffer = (clBuffer cl) ++ [parseCmd (init line)] }
 
 
 emptyBuffer :: ChatClient -> ChatClient
@@ -169,8 +170,6 @@ executeCmd (Nick newName) =
     \cl cls -> let oldName = clName cl
                in broadcastMessage cls (oldName ++ " -> "++newName) >>
                   return cl { clName = newName }
-executeCmd c = error ("Command \""++show c++"\" not implemented")
-
 
 
 quitConnection :: [ChatClient] -> ChatClient -> IO [ChatClient]
@@ -194,7 +193,7 @@ greetNewClient oldCls newCl =
         msg = unlines
               [ "Welcome.  Currently in the chat are:"
               , names
-              , "Enter \'quit\' to leave the chat."
+              , commandHelp
               , "Happy chatting."
               ]
     in send msg newCl >> logMsg ("Greeting client "++clName newCl)
@@ -211,7 +210,7 @@ checkClientForInput cl =
     in hReady hdl >>= \avail ->
        if avail
        then hGetLine hdl >>= \line ->
-            return (addLineToBuffer line cl)
+            (return (addLineToBuffer line cl))
        else return cl
 
 
