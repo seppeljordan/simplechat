@@ -1,10 +1,9 @@
 #!/usr/bin/runhaskell
-module Chat (main)
+module Main (main)
 
 where
 
 import Control.Concurrent hiding (isEmptyChan)
-import Control.Exception
 import Data.Time.Clock
 import Data.Time.Format
 import qualified Network.Socket as Net
@@ -43,14 +42,14 @@ newtype Message = Message (UTCTime, String)
 
 
 instance Show Message where
-    show (Chat.Message (t, s)) =
+    show (Main.Message (t, s)) =
         let showTime = formatTime defaultTimeLocale "%d.%m, (%H:%M)" t
         in showTime ++ ": " ++ s
 
 
 makeMsg :: String -> IO Message
 makeMsg text =
-    fmap (\time -> Chat.Message (time,text)) getCurrentTime
+    fmap (\time -> Main.Message (time,text)) getCurrentTime
 
 
 data ChatClient = ChatClient { clName :: String
@@ -186,6 +185,9 @@ executeCmd (PM target msg) =
 
 
 sendPM :: [ChatClient] -> ChatClient -> String -> String -> IO ()
+sendPM cls src destName _
+    | (null.filter (\x -> clName x == destName)) cls = 
+        sendMessage ("User \'"++destName++"\' not found") src
 sendPM cls src destName text =
     let targets = filter (\x -> clName x == destName) cls
         msg = "<"++clName src++"> "++text
@@ -244,3 +246,4 @@ main =
     spawnListener clientFromSocket >>= \l ->
     mainLoop l [] >>
     killListener l
+

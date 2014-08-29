@@ -7,6 +7,7 @@ module Chat.Cmd ( Command (..)
 where
 
 import Text.Parsec
+import Data.Functor.Identity
 
 
 data Command = Quit
@@ -18,24 +19,32 @@ data Command = Quit
              | PM String String
                deriving (Show)
 
+type Parser a = ParsecT String a Data.Functor.Identity.Identity Command
+
+parseOnly :: String -> Command -> Parser a
 parseOnly str x =
     string str >> eof >> return x
 
+parseQuit :: Parser a
 parseQuit =
     parseOnly "quit" Quit
 
+parseNick :: Parser a
 parseNick =
     string "nick " >>
     many1 letter >>= \name ->
     eof >>
     return (Nick name)
 
+parseWho :: Parser a
 parseWho =
     parseOnly "who" Who
 
+parseHelp :: Parser a
 parseHelp =
     parseOnly "help" Help
 
+parsePM :: Parser a
 parsePM =
     string "pm" >>
     many1 space >>
@@ -45,6 +54,7 @@ parsePM =
     eof >>
     return (PM target msg)
 
+parseCommand :: Parser a
 parseCommand =
     (many.char) ' ' >>
     char '/' >>
@@ -55,11 +65,12 @@ parseCommand =
      try parsePM <|>
      (many anyChar >> eof >> return (CmdError "Command not recognized") )
     )
-
+parseMessage :: Parser a
 parseMessage = many anyChar >>= \msg ->
                eof >>
                return (Message msg)
 
+cmdLine :: Parser a
 cmdLine = try parseCommand <|> parseMessage
 
 
