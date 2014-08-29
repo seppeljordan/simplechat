@@ -170,6 +170,10 @@ executeCmd (Nick newName) =
     \cl cls -> let oldName = clName cl
                in broadcastMessage cls (oldName ++ " -> "++newName) >>
                   return cl { clName = newName }
+executeCmd (CmdError msg) =
+    \cl _ -> send msg cl >>
+             send commandHelp cl >>
+             return cl
 
 
 quitConnection :: [ChatClient] -> ChatClient -> IO [ChatClient]

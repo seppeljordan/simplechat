@@ -13,6 +13,7 @@ data Command = Quit
              | Nick String
              | Who
              | Help
+             | CmdError String
              | Message String
                deriving (Show)
 
@@ -20,28 +21,35 @@ parseOnly str x =
     string str >> eof >> return x
 
 parseQuit =
-    parseOnly "/quit" Quit
+    parseOnly "quit" Quit
 
 parseNick =
-    string "/nick " >> many letter >>= \name ->
+    string "nick " >>
+    many letter >>= \name ->
+    eof >>
     return (Nick name)
 
 parseWho =
-    parseOnly "/who" Who
+    parseOnly "who" Who
 
 parseHelp =
-    parseOnly "/help" Help
+    parseOnly "help" Help
+
+parseCommand =
+    (many.char) ' ' >>
+    char '/' >>
+    (try parseQuit <|>
+     try parseNick <|>
+     try parseWho <|>
+     try parseHelp <|>
+     (many anyChar >> eof >> return (CmdError "Command not recognized") )
+    )
 
 parseMessage = many anyChar >>= \msg ->
                eof >>
                return (Message msg)
 
-cmdLine =
-    try parseQuit <|>
-    try parseNick <|>
-    try parseWho <|>
-    try parseHelp <|>
-    parseMessage
+cmdLine = try parseCommand <|> parseMessage
 
 
 parseCmd :: String -> Command
