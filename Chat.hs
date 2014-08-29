@@ -3,14 +3,14 @@ module Chat (main)
 
 where
 
-import Control.Concurrent
-import Control.Exception
+import Control.Concurrent hiding (isEmptyChan)
 import Data.Time.Clock
 import Data.Time.Format
 import qualified Network.Socket as Net
 import System.IO
 import System.Locale
 
+import Chat.Cmd
 import Network.Listener
 
 
@@ -20,11 +20,6 @@ port = Net.PortNum 4141
 
 host :: Net.HostAddress
 host = Net.iNADDR_ANY
-
-
-filterEmpty :: (Eq a) => [[a]] -> [[a]]
-filterEmpty xss =
-    filter (\xs -> not (xs==[])) xss
 
 
 openSocket :: IO Net.Socket
@@ -37,23 +32,30 @@ openSocket =
     return s
 
 
+clientFromSocket :: Net.Socket -> IO ChatClient
+clientFromSocket sock =
+    logMsg "Client tries to connect" >>
+    socketToClient "NoName" sock
+
+
 newtype Message = Message (UTCTime, String)
 
 
 instance Show Message where
-    show (Message (t, s)) =
+    show (Chat.Message (t, s)) =
         let showTime = formatTime defaultTimeLocale "%d.%m, (%H:%M)" t
         in showTime ++ ": " ++ s
 
 
 makeMsg :: String -> IO Message
 makeMsg text =
-    fmap (\time -> Message (time,text)) getCurrentTime
+    fmap (\time -> Chat.Message (time,text)) getCurrentTime
 
 
 data ChatClient = ChatClient { clName :: String
                              , clHandle :: Handle
-                             , clBuffer :: [String]
+                             , clBuffer :: [Command]
+                             , clConnected :: Bool
                              }
 
 
@@ -66,22 +68,29 @@ addLineToBuffer :: String -> ChatClient -> ChatClient
 addLineToBuffer [] cl = cl
 addLineToBuffer line cl | words line == [] = cl
                         | otherwise =
-                            cl
-                            { clBuffer = clBuffer cl ++ [line] }
+                            cl { clBuffer = (clBuffer cl) ++ [(read line)] }
 
 
-getMsg :: ChatClient -> (ChatClient, Maybe String)
-getMsg cl | hasMsg cl = ( cl { clBuffer = (filterEmpty.tail) (clBuffer cl) }
-                        , Just ((head.filterEmpty.clBuffer) cl)
+emptyBuffer :: ChatClient -> ChatClient
+emptyBuffer cl =
+    cl { clBuffer = [] }
+
+
+getMsg :: ChatClient -> (ChatClient, Maybe Command)
+getMsg cl | hasMsg cl = ( cl { clBuffer = (tail.clBuffer) cl }
+                        , Just ((head.clBuffer) cl)
                         )
           | otherwise = (cl, Nothing)
 
 
 hasMsg :: ChatClient -> Bool
-hasMsg cl | clBuffer cl == [] = False
-          | (filterEmpty.clBuffer) cl == []= False
-          | (words.head.clBuffer) cl == [] = False
-          | otherwise = True
+hasMsg cl | (not.null.clBuffer) cl = True
+          | otherwise = False
+
+
+disconnectClient :: ChatClient -> ChatClient
+disconnectClient cl =
+    cl { clConnected = False }
 
 
 socketToClient :: String -> Net.Socket -> IO ChatClient
@@ -89,26 +98,15 @@ socketToClient name socket =
     let construct hdl = ChatClient { clName = name
                                    , clHandle = hdl
                                    , clBuffer = []
+                                   , clConnected = True
                                    }
     in fmap construct (Net.socketToHandle socket ReadWriteMode)
-
-
-closeClient :: ChatClient -> IO ()
-closeClient cl =
-    logMsg ("Connection to "++clName cl++" closed") >>
-    hClose (clHandle cl)
 
 
 broadcast :: [ChatClient] -> String -> IO ()
 broadcast cls str =
     (sequence_ . map (send str)) cls >>
     logMsg ("Broadcasted: "++str)
-
-
-mbroadcastMessage :: [ChatClient] -> Maybe String -> IO ()
-mbroadcastMessage _ Nothing = return ()
-mbroadcastMessage cls (Just text) =
-    broadcastMessage cls text
 
 
 broadcastMessage :: [ChatClient] -> String -> IO ()
@@ -119,88 +117,69 @@ broadcastMessage cls text =
 
 send :: String -> ChatClient -> IO ()
 send str cl =
-    hPutStrLn (clHandle cl) str >> hFlush (clHandle cl)
+    if clConnected cl
+    then hPutStrLn (clHandle cl) str >> hFlush (clHandle cl)
+    else return ()
 
 
-mainLoop :: Chan ChatClient -> [ChatClient] -> IO ()
-mainLoop chan clients =
-    threadDelay 1000 >>
-    checkForConnections chan >>=
+mainLoop :: Listener ChatClient -> [ChatClient] -> IO ()
+mainLoop l clients =
+    threadDelay 5000 >>
+    listenChannel l >>=
     installNewConnections clients >>=
     checkClientsForInput >>=
-    disconnectClients >>=
-    renameClients >>=
-    broadcastAll >>=
-    mainLoop chan
+    checkActions >>=
+    mainLoop l
 
 
-checkForConnections :: Chan ChatClient -> IO [ChatClient]
-checkForConnections chan =
-    isEmptyChan chan >>= \p ->
-    if p
-    then return []
-    else readChan chan >>= \msg ->
-         checkForConnections chan >>= \msgs ->
-         return (msg:msgs)
+checkActions :: [ChatClient] -> IO [ChatClient]
+checkActions cls =
+    let iter [] done = return done
+        iter (x:pending) done = handleClient x ([x]++pending++done) >>= \x' ->
+                                   iter pending (x':done)
+    in iter cls [] >>= \cls' ->
+       return (filter clConnected cls')
 
 
-broadcastAll :: [ChatClient] -> IO [ChatClient]
-broadcastAll cls =
-    (sequence.map (broadcastOne cls)) cls
+handleClient :: ChatClient -> [ChatClient] -> IO ChatClient
+handleClient cl cls =
+    let (cl', mcmd) = getMsg cl
+    in maybe
+       (return cl')
+       (\cmd -> (executeCmd cmd) cl' cls >>= \cl'' ->
+                handleClient cl'' cls)
+       mcmd
 
 
-broadcastOne :: [ChatClient] -> ChatClient -> IO ChatClient
-broadcastOne cls cl =
+executeCmd :: Command -> (ChatClient -> [ChatClient] -> IO ChatClient)
+executeCmd Quit =
+    \cl cls -> quitConnection cls cl >>
+               return ((disconnectClient.emptyBuffer) cl)
+executeCmd (Chat.Cmd.Message s) =
+    \cl cls -> let others = filter (not.(== cl)) cls
+               in broadcastMessage others (clName cl++": "++s) >>
+                  return cl
+executeCmd Help =
+    \cl _ -> send commandHelp cl >>
+               return cl
+executeCmd Who =
+    \cl cls -> send ((unwords.map clName) cls) cl >>
+               return cl
+executeCmd (Nick newName) =
+    \cl cls -> let oldName = clName cl
+               in broadcastMessage cls (oldName ++ " -> "++newName) >>
+                  return cl { clName = newName }
+executeCmd c = error ("Command \""++show c++"\" not implemented")
+
+
+
+quitConnection :: [ChatClient] -> ChatClient -> IO [ChatClient]
+quitConnection cls cl =
     let others = filter (not.(== cl)) cls
-        (newCl, mtext) = getMsg cl
-    in return (fmap ((clName cl++": ")++) mtext) >>= \mmsg ->
-       mbroadcastMessage others mmsg >>
-       return newCl
-
-
-disconnectClients :: [ChatClient] -> IO [ChatClient]
-disconnectClients cls =
-    let hasQuitCmd cl =
-            maybe False
-                  (\txt -> "quit" == (unwords.words) txt)
-                  ((\(_,mtxt) -> mtxt) (getMsg cl))
-        activeCls = filter (not.hasQuitCmd) cls
-    in (sequence_.map (disconnectClient activeCls).filter hasQuitCmd) cls >>
-       (return activeCls)
-
-
-disconnectClient :: [ChatClient] -> ChatClient -> IO ()
-disconnectClient cls cl =
-    send "Disconnecting..." cl >>
-    broadcastMessage cls (clName cl++" disconnected") >>
-    hClose (clHandle cl)
-
-
-renameClients :: [ChatClient] -> IO [ChatClient]
-renameClients cls = (sequence.map (renameClient cls)) cls
-
-
-hasRenameCommand :: ChatClient -> Bool
-hasRenameCommand cl
-    | (not.hasMsg) cl = False
-    | otherwise =
-        let (_,mtext) = getMsg cl
-        in Just True == fmap (\txt ->
-                                  assert ((length.words) txt /= 0) ((head.words) txt == "nick")
-                             ) mtext
-
-
-renameClient :: [ChatClient] -> ChatClient -> IO ChatClient
-renameClient _ cl | (not.hasMsg) cl = return cl
-                  | (not.hasRenameCommand) cl = return cl
-renameClient cls cl =
-    let (newCl, mtext) = getMsg cl
-        oldName = clName cl
-    in if (head.words.(maybe "arg" id)) mtext == "nick"
-       then let newName = (unwords.tail.words.(maybe "" id)) mtext
-            in broadcastMessage cls (oldName ++ " -> " ++ newName) >>
-               return (newCl { clName =  newName })
-       else return cl
+    in send "Disconnecting..." cl >>
+       broadcastMessage others (clName cl++" disconnected") >>
+       hClose (clHandle cl)
+       >> return others
 
 
 installNewConnections :: [ChatClient] -> [ChatClient] -> IO [ChatClient]
@@ -236,12 +215,6 @@ checkClientForInput cl =
        else return cl
 
 
-clientFromSocket :: Net.Socket -> IO ChatClient
-clientFromSocket sock =
-    logMsg "Client tries to connect" >>
-    socketToClient "NoName" sock
-
-
 logMsg :: String -> IO ()
 logMsg = putStrLn
 
@@ -250,5 +223,5 @@ main :: IO ()
 main =
     openSocket >>=
     spawnListener clientFromSocket >>= \l ->
-    mainLoop (getChan l) [] >>
+    mainLoop l [] >>
     killListener l
