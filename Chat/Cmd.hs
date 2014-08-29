@@ -51,22 +51,6 @@ parseCmd line =
            (parse cmdLine "(unknown)" line)
 
 
-
--- We have to think of false command input
-instance Read Command where
-    readsPrec _ s =
-        let [(x,rest)] = lex s
-        in case x of
-             "quit" -> [(Quit, rest)]
-             "nick" -> [ ( Nick ((fst.head.lex) rest)
-                         , (snd.head.lex) rest
-                         )
-                       ]
-             "help" -> [(Help,rest)]
-             "who" -> [(Who, rest)]
-             _ -> [(Message s, "")]
-
-
 cmdToMstring :: Command -> Maybe String
 cmdToMstring (Message s) = Just s
 cmdToMstring _ = Nothing
