@@ -11,6 +11,7 @@ import qualified Network.Socket as Net
 import System.IO
 import System.Locale
 
+import Chat.Client
 import Chat.Cmd
 import Network.Listener
 
@@ -58,7 +59,6 @@ getClientConstructor :: Net.Socket -> IO (String -> ChatClient)
 getClientConstructor sock =
     logMsg "Client tries to connect" >>
     socketToClient "NoName" sock >>= \cl ->
-    logMsg "Client connected" >>
     return (\newName -> cl { clName=newName })
 
 
@@ -74,47 +74,6 @@ instance Show Message where
 makeMsg :: String -> IO Message
 makeMsg text =
     fmap (\time -> Main.Message (time,text)) getCurrentTime
-
-
-data ChatClient = ChatClient { clName :: String
-                             , clHandle :: Handle
-                             , clBuffer :: [Command]
-                             , clConnected :: Bool
-                             }
-
-
-instance Eq ChatClient where
-    (==) cl1 cl2 =
-        clHandle cl1 == clHandle cl2
-
-
-addLineToBuffer :: String -> ChatClient -> ChatClient
-addLineToBuffer [] cl = cl
-addLineToBuffer line cl | words line == [] = cl
-                        | otherwise =
-                            cl { clBuffer = (clBuffer cl) ++ [parseCmd (init line)] }
-
-
-emptyBuffer :: ChatClient -> ChatClient
-emptyBuffer cl =
-    cl { clBuffer = [] }
-
-
-getMsg :: ChatClient -> (ChatClient, Maybe Command)
-getMsg cl | hasMsg cl = ( cl { clBuffer = (tail.clBuffer) cl }
-                        , Just ((head.clBuffer) cl)
-                        )
-          | otherwise = (cl, Nothing)
-
-
-hasMsg :: ChatClient -> Bool
-hasMsg cl | (not.null.clBuffer) cl = True
-          | otherwise = False
-
-
-disconnectClient :: ChatClient -> ChatClient
-disconnectClient cl =
-    cl { clConnected = False }
 
 
 socketToClient :: String -> Net.Socket -> IO ChatClient
@@ -163,28 +122,12 @@ mainLoop l clients =
 
 
 checkActions :: [ChatClient] -> IO [ChatClient]
-checkActions cls =
-    let iter [] done = return done
-        iter (x:pending) done = handleClient ([x]++pending++done) x >>= \x' ->
-                                   iter pending (x':done)
-    in iter cls [] >>= \cls' ->
-       return (filter clConnected cls')
-
-
-handleClient :: [ChatClient] -> ChatClient -> IO ChatClient
-handleClient cls cl =
-    let (cl', mcmd) = getMsg cl
-    in maybe
-       (return cl')
-       (\cmd -> (executeCmd cmd) cls cl' >>=
-                handleClient cls)
-       mcmd
+checkActions = handleClients executeCmd
 
 
 executeCmd :: Command -> ([ChatClient] -> ChatClient -> IO ChatClient)
 executeCmd Quit =
-    \cls cl -> quitConnection cls cl >>
-               return ((disconnectClient.emptyBuffer) cl)
+    \cls cl -> quitConnection cls cl
 executeCmd (Chat.Cmd.Message s) =
     \cls cl -> let others = filter (not.(== cl)) cls
                in broadcastMessage others (clName cl++": "++s) >>
@@ -213,7 +156,7 @@ executeCmd (PM target msg) =
 
 sendPM :: [ChatClient] -> ChatClient -> String -> String -> IO ()
 sendPM cls src destName _
-    | (null.filter (\x -> clName x == destName)) cls = 
+    | (null.filter (\x -> clName x == destName)) cls =
         sendMessage ("User \'"++destName++"\' not found") src
 sendPM cls src destName text =
     let targets = filter (\x -> clName x == destName) cls
@@ -221,13 +164,13 @@ sendPM cls src destName text =
     in (sequence_.map (sendMessage msg)) targets
 
 
-quitConnection :: [ChatClient] -> ChatClient -> IO [ChatClient]
+quitConnection :: [ChatClient] -> ChatClient -> IO ChatClient
 quitConnection cls cl =
     let others = filter (not.(== cl)) cls
     in send "Disconnecting..." cl >>
        broadcastMessage others (clName cl++" disconnected") >>
-       hClose (clHandle cl)
-       >> return others
+       disconnectClient cl
+
 
 
 installNewConnections :: [ChatClient] -> [String -> ChatClient] -> IO [ChatClient]
@@ -249,21 +192,6 @@ greetNewClient oldCls newCl =
               , "Happy chatting."
               ]
     in send msg newCl >> logMsg ("Greeting client "++clName newCl)
-
-
-checkClientsForInput :: [ChatClient] -> IO [ChatClient]
-checkClientsForInput cls =
-    (sequence.map checkClientForInput) cls
-
-
-checkClientForInput :: ChatClient -> IO ChatClient
-checkClientForInput cl =
-    let hdl = (clHandle cl)
-    in hReady hdl >>= \avail ->
-       if avail
-       then hGetLine hdl >>= \line ->
-            (return (addLineToBuffer line cl))
-       else return cl
 
 
 logMsg :: String -> IO ()
