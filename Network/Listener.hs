@@ -7,6 +7,7 @@ module Network.Listener ( Listener
 
 where
 
+import Control.Monad
 import Control.Monad.STM
 import Control.Concurrent.STM.TChan
 import Control.Concurrent
@@ -21,9 +22,7 @@ getChan (_,c) = c
 checkSocket :: Socket -> IO ()
 checkSocket sock =
     isListening sock >>= \p ->
-    if p
-    then return ()
-    else error "checkSocket: Socket is not listening"
+    when (not p) (error "checkSocket: Socket is not listening")
 
 
 makeListener :: (Socket -> IO a) -> Socket -> TChan a -> IO ()

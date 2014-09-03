@@ -4,6 +4,7 @@ module Main (main)
 where
 
 import Control.Concurrent hiding (isEmptyChan)
+import Control.Monad
 import Data.List
 import Data.Time.Clock
 import Data.Time.Format
@@ -100,9 +101,9 @@ broadcastMessage cls text =
 
 send :: String -> ChatClient -> IO ()
 send str cl =
-    if clConnected cl
-    then hPutStrLn (clHandle cl) str >> hFlush (clHandle cl)
-    else return ()
+    when (clConnected cl)
+    (hPutStrLn (clHandle cl) str >> hFlush (clHandle cl))
+
 
 
 sendMessage :: String -> ChatClient -> IO ()
@@ -113,18 +114,23 @@ sendMessage text cl =
 
 mainLoop :: Listener (String -> ChatClient) -> [ChatClient] -> IO ()
 mainLoop l clients =
-    threadDelay 5000 >>
-    listenChannel l >>=
-    installNewConnections clients >>=
-    checkClientsForInput >>=
-    checkActions >>=
-    mainLoop l
+    let wait = threadDelay 5000
+        checkNewConnections = listenChannel l >>=
+                              installNewConnections clients
+        processClientInput cls = checkClientsForInput cls >>=
+                                 processInput
+
+    in wait >>
+       checkNewConnections >>=
+       processClientInput >>=
+       mainLoop l
 
 
-checkActions :: [ChatClient] -> IO [ChatClient]
-checkActions = handleClients executeCmd
+processInput :: [ChatClient] -> IO [ChatClient]
+processInput = handleClients executeCmd
 
 
+-- |Treat a client according to the command it sent.
 executeCmd :: Command -> ([ChatClient] -> ChatClient -> IO ChatClient)
 executeCmd Quit =
     \cls cl -> quitConnection cls cl
