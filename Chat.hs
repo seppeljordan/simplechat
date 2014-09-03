@@ -4,6 +4,7 @@ module Main (main)
 where
 
 import Control.Concurrent hiding (isEmptyChan)
+import Data.List
 import Data.Time.Clock
 import Data.Time.Format
 import qualified Network.Socket as Net
@@ -14,14 +15,19 @@ import Chat.Cmd
 import Network.Listener
 
 
+-- |Standard port
 port :: Net.PortNumber
-port = Net.PortNum 4141
+-- We have to use this strange syntax because otherwise the wrong port
+-- will be assigned
+port = fromIntegral (4141 :: Int)
 
 
+-- |Adresses that are allowed to connect
 host :: Net.HostAddress
 host = Net.iNADDR_ANY
 
 
+-- |Open a socket and listen on the socket
 openSocket :: IO Net.Socket
 openSocket =
     Net.socket Net.AF_INET Net.Stream Net.defaultProtocol >>= \s ->
@@ -32,10 +38,28 @@ openSocket =
     return s
 
 
-clientFromSocket :: Net.Socket -> IO ChatClient
-clientFromSocket sock =
+findNewName :: [String] -> String
+findNewName strs =
+    let iter n s = if not ("NoName"++show (n::Int) `elem` s)
+                   then "NoName"++show n
+                   else iter (n+1) s
+    in iter 0 (filter (isPrefixOf "NoName") strs)
+
+
+findNewNames :: Int -> [String] -> [String]
+findNewNames 0 _ = []
+findNewNames n strs =
+    let strs' = (findNewName strs):strs
+    in (findNewNames (n-1) strs') ++ strs'
+
+
+-- |Make a function that takes a string and returns a client from a socket
+getClientConstructor :: Net.Socket -> IO (String -> ChatClient)
+getClientConstructor sock =
     logMsg "Client tries to connect" >>
-    socketToClient "NoName" sock
+    socketToClient "NoName" sock >>= \cl ->
+    logMsg "Client connected" >>
+    return (\newName -> cl { clName=newName })
 
 
 newtype Message = Message (UTCTime, String)
@@ -128,7 +152,7 @@ sendMessage text cl =
     send (show msg) cl
 
 
-mainLoop :: Listener ChatClient -> [ChatClient] -> IO ()
+mainLoop :: Listener (String -> ChatClient) -> [ChatClient] -> IO ()
 mainLoop l clients =
     threadDelay 5000 >>
     listenChannel l >>=
@@ -141,46 +165,49 @@ mainLoop l clients =
 checkActions :: [ChatClient] -> IO [ChatClient]
 checkActions cls =
     let iter [] done = return done
-        iter (x:pending) done = handleClient x ([x]++pending++done) >>= \x' ->
+        iter (x:pending) done = handleClient ([x]++pending++done) x >>= \x' ->
                                    iter pending (x':done)
     in iter cls [] >>= \cls' ->
        return (filter clConnected cls')
 
 
-handleClient :: ChatClient -> [ChatClient] -> IO ChatClient
-handleClient cl cls =
+handleClient :: [ChatClient] -> ChatClient -> IO ChatClient
+handleClient cls cl =
     let (cl', mcmd) = getMsg cl
     in maybe
        (return cl')
-       (\cmd -> (executeCmd cmd) cl' cls >>= \cl'' ->
-                handleClient cl'' cls)
+       (\cmd -> (executeCmd cmd) cls cl' >>=
+                handleClient cls)
        mcmd
 
 
-executeCmd :: Command -> (ChatClient -> [ChatClient] -> IO ChatClient)
+executeCmd :: Command -> ([ChatClient] -> ChatClient -> IO ChatClient)
 executeCmd Quit =
-    \cl cls -> quitConnection cls cl >>
+    \cls cl -> quitConnection cls cl >>
                return ((disconnectClient.emptyBuffer) cl)
 executeCmd (Chat.Cmd.Message s) =
-    \cl cls -> let others = filter (not.(== cl)) cls
+    \cls cl -> let others = filter (not.(== cl)) cls
                in broadcastMessage others (clName cl++": "++s) >>
                   return cl
 executeCmd Help =
-    \cl _ -> send commandHelp cl >>
+    \_ cl -> send commandHelp cl >>
                return cl
 executeCmd Who =
-    \cl cls -> send ((unwords.map clName) cls) cl >>
+    \cls cl -> send ((unwords.map clName) cls) cl >>
                return cl
 executeCmd (Nick newName) =
-    \cl cls -> let oldName = clName cl
-               in broadcastMessage cls (oldName ++ " -> "++newName) >>
-                  return cl { clName = newName }
+    \cls cl -> if not (newName `elem` (map clName cls))
+               then let oldName = clName cl
+                    in broadcastMessage cls (oldName ++ " -> "++newName) >>
+                       return cl { clName = newName }
+               else sendMessage (newName++" is already taken") cl >>
+                    return cl
 executeCmd (CmdError msg) =
-    \cl _ -> send msg cl >>
+    \_ cl -> send msg cl >>
              send commandHelp cl >>
              return cl
 executeCmd (PM target msg) =
-    \cl cls -> sendPM cls cl target msg >>
+    \cls cl -> sendPM cls cl target msg >>
                return cl
 
 
@@ -203,17 +230,20 @@ quitConnection cls cl =
        >> return others
 
 
-installNewConnections :: [ChatClient] -> [ChatClient] -> IO [ChatClient]
+installNewConnections :: [ChatClient] -> [String -> ChatClient] -> IO [ChatClient]
 installNewConnections oldCls newCls =
-    (sequence_.map (greetNewClient oldCls)) newCls >>
-    return (newCls ++ oldCls)
+    let names = map clName oldCls
+        namedCls = zipWith (\n cl -> cl n) newNames newCls
+        newNames = findNewNames (length newCls) names
+    in (sequence_.map (greetNewClient oldCls)) namedCls >>
+       return (namedCls ++ oldCls)
 
 
 greetNewClient :: [ChatClient] -> ChatClient -> IO ()
 greetNewClient oldCls newCl =
     let names = (unwords . map clName) oldCls
         msg = unlines
-              [ "Welcome.  Currently in the chat are:"
+              [ "Welcome "++show (clName newCl)++".  Currently in the chat are:"
               , names
               , commandHelp
               , "Happy chatting."
@@ -243,7 +273,6 @@ logMsg = putStrLn
 main :: IO ()
 main =
     openSocket >>=
-    spawnListener clientFromSocket >>= \l ->
+    spawnListener getClientConstructor >>= \l ->
     mainLoop l [] >>
     killListener l
-
