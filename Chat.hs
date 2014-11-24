@@ -25,8 +25,8 @@ port = fromIntegral (4141 :: Int)
 
 
 -- |Adresses that are allowed to connect
-host :: Net.HostAddress
-host = Net.iNADDR_ANY
+allowedHosts :: Net.HostAddress
+allowedHosts = Net.iNADDR_ANY
 
 
 -- |Open a socket and listen on the socket
@@ -34,7 +34,7 @@ openSocket :: IO Net.Socket
 openSocket =
     Net.socket Net.AF_INET Net.Stream Net.defaultProtocol >>= \s ->
     Net.setSocketOption s Net.ReuseAddr 1 >>
-    Net.bind s (Net.SockAddrInet port host) >>
+    Net.bind s (Net.SockAddrInet port allowedHosts) >>
     Net.listen s 2 >>
     logMsg ("Socket opened on port "++show port) >>
     return s
@@ -77,6 +77,7 @@ makeMsg text =
     fmap (\time -> Main.Message (time,text)) getCurrentTime
 
 
+-- |Returns a ChatClient from a name for the new client and a socket.
 socketToClient :: String -> Net.Socket -> IO ChatClient
 socketToClient name socket =
     let construct hdl = ChatClient { clName = name
@@ -206,7 +207,9 @@ logMsg = putStrLn
 
 main :: IO ()
 main =
-    openSocket >>=
-    spawnListener getClientConstructor >>= \l ->
-    mainLoop l [] >>
-    killListener l
+    Net.withSocketsDo
+           ( openSocket >>=
+             spawnListener getClientConstructor >>= \l ->
+             mainLoop l [] >>
+             killListener l
+           )
